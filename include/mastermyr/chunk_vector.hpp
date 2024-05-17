@@ -192,8 +192,8 @@ private:
 	
 	void add_chunk()
 	{
-		auto allocator = Allocator(m_chunks.get_allocator());
-		pointer chunk = std::allocator_traits<Allocator>::allocate(allocator, ChunkSize);
+		auto allocator = allocator_type(m_chunks.get_allocator());
+		pointer chunk = std::allocator_traits<allocator_type>::allocate(allocator, ChunkSize);
 		m_chunks.push_back(chunk);
 	}
 
@@ -203,26 +203,160 @@ private:
 			add_chunk();
 	}
 
+	void deallocate()
+	{
+		auto allocator = allocator_type(m_chunks.get_allocator());
+		for (auto* chunk_ptr : m_chunks)
+			std::allocator_traits<allocator_type>::deallocate(allocator, chunk_ptr, ChunkSize);
+	}
+
 public:
 
-	chunk_vector() = default;
+	//
+	// constructors
+	//
+
+	chunk_vector() noexcept(noexcept(Allocator())) = default;
+
+	explicit chunk_vector(const allocator_type& alloc) noexcept
+		: m_chunks(alloc)
+	{}
+
+	chunk_vector(size_type count, const value_type& v = value_type(), const allocator_type& alloc = allocator_type())
+		: m_chunks(alloc)
+	{
+		for (size_type i = 0; i < count; ++i)
+		{
+			emplace_back(v);
+		}
+	}
+
+	chunk_vector(size_type count, const allocator_type& alloc = allocator_type())
+		: m_chunks(alloc)
+	{
+		for (size_type i = 0; i < count; ++i)
+		{
+			emplace_back(value_type());
+		}
+	}
 
 	template<class InputIt>
 	chunk_vector(InputIt first, InputIt last, const allocator_type& alloc = allocator_type())
+		: m_chunks(alloc)
 	{
-		while (first != last)
+		for (; first != last; ++first)
 		{
+			emplace_back(*first);
+		}
+	}
 
+	chunk_vector(const chunk_vector& other)
+		: m_chunks(std::allocator_traits<allocator_type>::select_on_container_copy_construction(other.get_allocator()))
+	{
+		for (auto it = other.begin(); it != other.end(); ++it)
+		{
+			emplace_back(*it);
+		}
+	}
+
+	chunk_vector(const chunk_vector& other, const allocator_type& alloc)
+		: m_chunks(alloc)
+	{
+		for (auto it = other.begin(); it != other.end(); ++it)
+		{
+			emplace_back(*it);
+		}
+	}
+
+	chunk_vector(chunk_vector&& other) noexcept
+		: m_chunks(std::move(other.m_chunks)), m_size(other.m_size)
+	{
+		other.clear();
+	}
+
+	chunk_vector(chunk_vector&& other, const allocator_type& alloc)
+		: m_chunks(alloc)
+	{
+		for (auto it = other.begin(); it != other.end(); ++it)
+		{
+			emplace_back(*it);
 		}
 	}
 
 	chunk_vector(std::initializer_list<value_type> init, allocator_type alloc = allocator_type())
 		: chunk_vector(init.begin(), init.end(), alloc)
-	{
+	{}
 
+	~chunk_vector()
+	{
+		clear();
+		deallocate();
 	}
 
-	// TODO: constructors (with allocator support) and assignment operators
+	// TODO: assignment operators
+
+	constexpr auto get_allocator() const noexcept -> allocator_type
+	{
+		return m_chunks.get_allocator();
+	}
+
+
+	//
+	// element access
+	//
+
+	[[nodiscard]]
+	constexpr auto at(size_type pos) -> reference
+	{
+		if (pos >= size())
+			throw std::out_of_range("index out of range");
+
+		return operator[](pos);
+	}
+
+	[[nodiscard]]
+	constexpr auto at(size_type pos) const -> const_reference
+	{
+		if (pos >= size())
+			throw std::out_of_range("index out of range");
+
+		return operator[](pos);
+	}
+
+	[[nodiscard]]
+	constexpr auto operator[](size_type n) noexcept -> reference
+	{
+		return *(begin() + n);
+	}
+
+	[[nodiscard]]
+	constexpr auto front() noexcept -> reference
+	{
+		return *begin();
+	}
+
+	[[nodiscard]]
+	constexpr auto front() const noexcept -> const_reference
+	{
+		return *begin();
+	}
+
+	[[nodiscard]]
+	constexpr auto back() noexcept -> reference
+	{
+		return *end();
+	}
+
+	[[nodiscard]]
+	constexpr auto back() const noexcept -> const_reference
+	{
+		return *end();
+	}
+
+
+	//
+	// iterators
+	//
 
 	[[nodiscard]]
 	constexpr auto begin() noexcept -> iterator
@@ -261,9 +395,64 @@ public:
 	}
 
 	[[nodiscard]]
+	constexpr auto rbegin() noexcept -> reverse_iterator
+	{
+		return std::make_reverse_iterator(end());
+	}
+
+	[[nodiscard]]
+	constexpr auto rbegin() const noexcept -> const_reverse_iterator
+	{
+		return std::make_reverse_iterator(end());
+	}
+
+	[[nodiscard]]
+	constexpr auto crbegin() const noexcept -> const_reverse_iterator
+	{
+		return std::make_reverse_iterator(const_cast<const chunk_vector&>(*this).end());
+	}
+
+	[[nodiscard]]
+	constexpr auto rend() noexcept -> reverse_iterator
+	{
+		return std::make_reverse_iterator(begin());
+	}
+
+	[[nodiscard]]
+	constexpr auto rend() const noexcept -> const_reverse_iterator
+	{
+		return std::make_reverse_iterator(begin());
+	}
+
+	[[nodiscard]]
+	constexpr auto crend() const noexcept -> const_reverse_iterator
+	{
+		return std::make_reverse_iterator(const_cast<const chunk_vector&>(*this).begin());
+	}
+
+	// 
+	// capacity
+	//
+
+	[[nodiscard]]
+	constexpr auto empty() noexcept -> bool
+	{
+		return m_size == 0;
+	}
+
+	[[nodiscard]]
 	constexpr auto size() noexcept -> size_type
 	{
 		return m_size;
+	}
+
+	void reserve(size_type new_cap)
+	{
+		const auto old_cap = capacity();
+		for (size_type i = new_cap - old_cap; i > 0; i -= ChunkSize)
+		{
+			add_chunk();
+		}
 	}
 
 	[[nodiscard]]
@@ -272,62 +461,9 @@ public:
 		return m_chunks.size() * ChunkSize;
 	}
 
-	[[nodiscard]]
-	constexpr auto empty() noexcept -> bool
-	{
-		return m_size == 0;
-	}
-
-	constexpr auto operator==(const chunk_vector& other) noexcept -> bool
-	{
-		return m_size == other.m_size && std::equal(begin(), end(), other.begin(), other.end());
-	}
-
-	constexpr auto operator!=(const chunk_vector& other) noexcept -> bool
-	{
-		return !(*this == other);
-	}
-
-	constexpr auto operator[](size_type n) noexcept -> reference
-	{
-		return *(begin() + n);
-	}
-
-	constexpr auto at(size_type pos) -> reference
-	{
-		if (pos >= size())
-			throw std::out_of_range("index out of range");
-
-		return operator[](pos);
-	}
-
-	constexpr auto at(size_type pos) const -> const_reference
-	{
-		if (pos >= size())
-			throw std::out_of_range("index out of range");
-
-		return operator[](pos);
-	}
-
-	constexpr auto front() noexcept -> reference
-	{
-		return *begin();
-	}
-
-	constexpr auto front() const noexcept -> const_reference
-	{
-		return *begin();
-	}
-
-	constexpr auto back() noexcept -> reference
-	{
-		return *end();
-	}
-
-	constexpr auto back() const noexcept -> const_reference
-	{
-		return *end();
-	}
+	//
+	// modifiers
+	//
 
 	constexpr void clear()
 	{
@@ -341,15 +477,8 @@ public:
 		}
 	}
 
-	void reserve(size_type new_cap)
-	{
-		if (new_cap <= capacity())
-			return;
-
-		// TODO: maybe not do this but actually allocate the chunks with the allocator
-		// m_chunks.resize(new_cap / ChunkSize);
-	}
-
+	// TODO: insert, emplace, erase
+	
 	void push_back(const value_type& v)
 	{
 		maybe_increase_capacity();
@@ -375,8 +504,6 @@ public:
 		return ref;
 	}
 
-	// TODO: other member funcs
-
 	// non-standard API, "the superconstructing super elider"
 	// https://quuxplusone.github.io/blog/2018/03/29/the-superconstructing-super-elider/
 	template<class Factory>
@@ -390,11 +517,20 @@ public:
 		return ref;
 	}
 
-	constexpr auto get_allocator() const noexcept -> allocator_type
+
+	//
+	// comparators
+	//
+
+	constexpr auto operator==(const chunk_vector& other) noexcept -> bool
 	{
-		return m_chunks.get_allocator();
+		return m_size == other.m_size && std::equal(begin(), end(), other.begin(), other.end());
 	}
 
+	constexpr auto operator!=(const chunk_vector& other) noexcept -> bool
+	{
+		return !(*this == other);
+	}
 };
 
 }
