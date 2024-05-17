@@ -2,10 +2,12 @@
 #define __mastermyr_chunk_vector_hpp
 
 #include <cstddef>
+#include <initializer_list>
 #include <iterator>
 #include <memory>
 #include <type_traits>
 #include <vector>
+#include <stdexcept>
 
 namespace myr {
 
@@ -188,57 +190,92 @@ private:
 
 	}; // iterator_type
 	
-	constexpr void add_chunk()
+	void add_chunk()
 	{
 		auto allocator = Allocator(m_chunks.get_allocator());
 		pointer chunk = std::allocator_traits<Allocator>::allocate(allocator, ChunkSize);
 		m_chunks.push_back(chunk);
 	}
 
+	void maybe_increase_capacity()
+	{
+		if (m_size == capacity())
+			add_chunk();
+	}
+
 public:
 
-	constexpr chunk_vector() = default;
+	chunk_vector() = default;
+
+	template<class InputIt>
+	chunk_vector(InputIt first, InputIt last, const allocator_type& alloc = allocator_type())
+	{
+		while (first != last)
+		{
+
+		}
+	}
+
+	chunk_vector(std::initializer_list<value_type> init, allocator_type alloc = allocator_type())
+		: chunk_vector(init.begin(), init.end(), alloc)
+	{
+
+	}
 
 	// TODO: constructors (with allocator support) and assignment operators
 
+	[[nodiscard]]
 	constexpr auto begin() noexcept -> iterator
 	{
 		return {m_chunks.data(), 0};
 	}
 
+	[[nodiscard]]
 	constexpr auto begin() const noexcept -> const_iterator
 	{
 		return {m_chunks.data(), 0};
 	}
 
+	[[nodiscard]]
 	constexpr auto cbegin() const noexcept -> const_iterator
 	{
 		return const_cast<const chunk_vector&>(*this).begin();
 	}
 
+	[[nodiscard]]
 	constexpr auto end() noexcept -> iterator
 	{
 		return {m_chunks.data(), m_size};
 	}
 
+	[[nodiscard]]
 	constexpr auto end() const noexcept -> const_iterator
 	{
 		return {m_chunks.data(), m_size};
 	}
 
+	[[nodiscard]]
 	constexpr auto cend() const noexcept -> const_iterator
 	{
 		return const_cast<const chunk_vector&>(*this).end();
 	}
 
+	[[nodiscard]]
 	constexpr auto size() noexcept -> size_type
 	{
 		return m_size;
 	}
 
+	[[nodiscard]]
 	constexpr auto capacity() noexcept -> size_type
 	{
 		return m_chunks.size() * ChunkSize;
+	}
+
+	[[nodiscard]]
+	constexpr auto empty() noexcept -> bool
+	{
+		return m_size == 0;
 	}
 
 	constexpr auto operator==(const chunk_vector& other) noexcept -> bool
@@ -256,11 +293,81 @@ public:
 		return *(begin() + n);
 	}
 
-	template<class... Args>
-	constexpr auto emplace_back(Args&&... args) -> reference
+	constexpr auto at(size_type pos) -> reference
 	{
-		if (m_size == capacity())
-				add_chunk();
+		if (pos >= size())
+			throw std::out_of_range("index out of range");
+
+		return operator[](pos);
+	}
+
+	constexpr auto at(size_type pos) const -> const_reference
+	{
+		if (pos >= size())
+			throw std::out_of_range("index out of range");
+
+		return operator[](pos);
+	}
+
+	constexpr auto front() noexcept -> reference
+	{
+		return *begin();
+	}
+
+	constexpr auto front() const noexcept -> const_reference
+	{
+		return *begin();
+	}
+
+	constexpr auto back() noexcept -> reference
+	{
+		return *end();
+	}
+
+	constexpr auto back() const noexcept -> const_reference
+	{
+		return *end();
+	}
+
+	constexpr void clear()
+	{
+		if constexpr (!std::is_trivially_destructible_v<value_type>)
+		{
+			for (size_type i = 0; i < m_size; ++i)
+			{
+				operator[](i).~T();
+			}
+			m_size = 0;
+		}
+	}
+
+	void reserve(size_type new_cap)
+	{
+		if (new_cap <= capacity())
+			return;
+
+		// TODO: maybe not do this but actually allocate the chunks with the allocator
+		// m_chunks.resize(new_cap / ChunkSize);
+	}
+
+	void push_back(const value_type& v)
+	{
+		maybe_increase_capacity();
+		operator[](m_size) = v;
+		++m_size;
+	}
+
+	void push_back(value_type&& v)
+	{
+		maybe_increase_capacity();
+		operator[](m_size) = std::move(v);
+		++m_size;
+	}
+
+	template<class... Args>
+	auto emplace_back(Args&&... args) -> reference
+	{
+		maybe_increase_capacity();
 
 		auto* ptr = static_cast<void*>(&operator[](m_size));
 		auto& ref = *new (ptr) T(std::forward<Args>(args)...);
@@ -273,10 +380,9 @@ public:
 	// non-standard API, "the superconstructing super elider"
 	// https://quuxplusone.github.io/blog/2018/03/29/the-superconstructing-super-elider/
 	template<class Factory>
-	constexpr auto emplace_back_with_result_of(const Factory& f) -> reference
+	auto emplace_back_with_result_of(const Factory& f) -> reference
 	{
-		if (m_size == capacity())
-			add_chunk();
+		maybe_increase_capacity();
 
 		auto* ptr = static_cast<void*>(&operator[](m_size));
 		auto& ref = *new (ptr) T(f());
@@ -284,6 +390,10 @@ public:
 		return ref;
 	}
 
+	constexpr auto get_allocator() const noexcept -> allocator_type
+	{
+		return m_chunks.get_allocator();
+	}
 
 };
 
