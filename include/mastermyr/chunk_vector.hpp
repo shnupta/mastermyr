@@ -11,6 +11,15 @@
 
 namespace myr {
 
+namespace detail {
+
+template<class Number>
+constexpr bool is_powerof2(Number v) {
+	return v && ((v & (v - 1)) == 0);
+}
+
+}
+
 // Container which stores elements in contiguous, fixed size sub-vectors called chunks.
 // Sort of a mix between a deque and a vector. Has one level of indirection but most elements are stored contiguously.
 // Provides smoother memory growth compared to the doubling of vector, as chunks can just be appended to the internal
@@ -24,6 +33,9 @@ template<
 	std::size_t ChunkSize = 4096>
 class chunk_vector
 {
+	static_assert(detail::is_powerof2(ChunkSize), "ChunkSize must be a power of 2");
+	static_assert(std::is_same_v<typename Allocator::value_type, T>, "Provided Allocator must allocate the same value type as T");
+
 private:
 	template<bool IsConst>
 	class iterator_type;
@@ -31,19 +43,20 @@ private:
 public:
 	using value_type = T;
 	using allocator_type = Allocator;
+	using allocator_traits = std::allocator_traits<allocator_type>;
 	using size_type = std::size_t;
 	using difference_type = std::ptrdiff_t;
 	using reference = value_type&;
 	using const_reference = const value_type&;
-	using pointer = typename std::allocator_traits<Allocator>::pointer;
-	using const_pointer = typename std::allocator_traits<Allocator>::const_pointer;
+	using pointer = typename allocator_traits::pointer;
+	using const_pointer = typename allocator_traits::const_pointer;
 	using iterator = iterator_type<false>;
 	using const_iterator = iterator_type<true>;
 	using reverse_iterator = std::reverse_iterator<iterator>;
 	using const_reverse_iterator = std::reverse_iterator<const_iterator>;
 
 private:
-	using chunk_allocator_type = typename std::allocator_traits<Allocator>::template rebind_alloc<pointer>;
+	using chunk_allocator_type = typename allocator_traits::template rebind_alloc<pointer>;
 	std::vector<pointer, chunk_allocator_type> m_chunks;
 	size_type m_size{};
 
@@ -193,7 +206,7 @@ private:
 	void add_chunk()
 	{
 		auto allocator = allocator_type(m_chunks.get_allocator());
-		pointer chunk = std::allocator_traits<allocator_type>::allocate(allocator, ChunkSize);
+		pointer chunk = allocator_traits::allocate(allocator, ChunkSize);
 		m_chunks.push_back(chunk);
 	}
 
@@ -207,7 +220,19 @@ private:
 	{
 		auto allocator = allocator_type(m_chunks.get_allocator());
 		for (auto* chunk_ptr : m_chunks)
-			std::allocator_traits<allocator_type>::deallocate(allocator, chunk_ptr, ChunkSize);
+			allocator_traits::deallocate(allocator, chunk_ptr, ChunkSize);
+	}
+
+	void emplace_back_all_from_other(const chunk_vector& other)
+	{
+		for (const auto& v : other)
+			emplace_back(v);
+	}
+
+	void emplace_back_all_from_other(chunk_vector&& other)
+	{
+		for (auto&& v : other)
+			emplace_back(std::move(v));
 	}
 
 public:
@@ -251,36 +276,25 @@ public:
 	}
 
 	chunk_vector(const chunk_vector& other)
-		: m_chunks(std::allocator_traits<allocator_type>::select_on_container_copy_construction(other.get_allocator()))
+		: m_chunks(allocator_traits::select_on_container_copy_construction(other.get_allocator()))
 	{
-		for (auto it = other.begin(); it != other.end(); ++it)
-		{
-			emplace_back(*it);
-		}
+		emplace_back_all_from_other(other);
 	}
 
 	chunk_vector(const chunk_vector& other, const allocator_type& alloc)
 		: m_chunks(alloc)
 	{
-		for (auto it = other.begin(); it != other.end(); ++it)
-		{
-			emplace_back(*it);
-		}
+		emplace_back_all_from_other(other);
 	}
 
 	chunk_vector(chunk_vector&& other) noexcept
-		: m_chunks(std::move(other.m_chunks)), m_size(other.m_size)
-	{
-		other.clear();
-	}
+		: chunk_vector(std::move(other), get_allocator())
+	{}
 
 	chunk_vector(chunk_vector&& other, const allocator_type& alloc)
 		: m_chunks(alloc)
 	{
-		for (auto it = other.begin(); it != other.end(); ++it)
-		{
-			emplace_back(*it);
-		}
+		emplace_back_all_from_other(other);
 	}
 
 	chunk_vector(std::initializer_list<value_type> init, allocator_type alloc = allocator_type())
@@ -293,7 +307,47 @@ public:
 		deallocate();
 	}
 
-	// TODO: assignment operators
+	auto operator=(const chunk_vector& other) -> chunk_vector&
+	{
+		if (this == &other)
+			return *this;
+
+		clear();
+		if (allocator_traits::propagate_on_container_copy_assignment::value && get_allocator() != other.get_allocator())
+		{
+			m_chunks = std::vector<pointer, chunk_allocator_type>(other.get_allocator());
+		}
+
+		emplace_back_all_from_other(other);
+		return *this;
+	}
+
+	auto operator=(chunk_vector&& other) noexcept -> chunk_vector&
+	{
+		clear();
+		deallocate();
+		if (get_allocator() == other.get_allocator())
+		{
+			m_chunks = std::move(other.m_chunks);
+			m_size = std::exchange(other.m_size, {});
+			return *this;
+		}
+
+		if (allocator_traits::propagate_on_container_move_assignment::value)
+		{
+			m_chunks = std::vector<pointer, chunk_allocator_type>(other.get_allocator());
+		}
+		emplace_back_all_from_other(std::move(other));
+		return *this;
+	}
+
+	auto operator=(std::initializer_list<value_type> ilist) -> chunk_vector&
+	{
+		clear();
+		for (const auto& v : ilist)
+			emplace_back(v);
+		return *this;
+	}
 
 	constexpr auto get_allocator() const noexcept -> allocator_type
 	{
@@ -344,13 +398,13 @@ public:
 	[[nodiscard]]
 	constexpr auto back() noexcept -> reference
 	{
-		return *end();
+		return *--end();
 	}
 
 	[[nodiscard]]
 	constexpr auto back() const noexcept -> const_reference
 	{
-		return *end();
+		return *--end();
 	}
 
 
@@ -473,8 +527,8 @@ public:
 			{
 				operator[](i).~T();
 			}
-			m_size = 0;
 		}
+		m_size = 0;
 	}
 
 	// TODO: insert, emplace, erase
