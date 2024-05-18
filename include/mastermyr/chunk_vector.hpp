@@ -22,9 +22,9 @@ constexpr bool is_powerof2(Number v) {
 
 // Container which stores elements in contiguous, fixed size sub-vectors called chunks.
 // Sort of a mix between a deque and a vector. Has one level of indirection but most elements are stored contiguously.
-// Provides smoother memory growth compared to the doubling of vector, as chunks can just be appended to the internal
-// vector which holds the allocated chunks.
-// Iterators are stable on insert but may be invalidated on erasure.
+// Provides smoother memory growth compared to the doubling of vector, as pointers to chunks can just be appended to 
+// the internal vector.
+// Iterators are stable on appending but may be invalidated on erasure.
 // Meets the requirements of Container, AllocatorAwareContainer, SequenceContainer, and ReversibleContainer.
 // Inspired by https://github.com/martinus/unordered_dense and https://github.com/david-grs/stable_vector
 template<
@@ -525,14 +525,53 @@ public:
 		{
 			for (size_type i = 0; i < m_size; ++i)
 			{
-				operator[](i).~T();
+				operator[](i).~value_type();
 			}
 		}
 		m_size = 0;
 	}
 
-	// TODO: insert, emplace, erase
+	// no insert or emplace to ensure all insert methods won't invalidate iterators
+	// potentially might add this later on anyway
 	
+	auto erase(iterator pos) -> iterator
+	{
+		if constexpr (!std::is_trivially_destructible_v<value_type>)
+		{
+			*pos.~value_type();
+		}
+		std::move(pos + 1, end(), pos);
+		pop_back();
+
+		return pos;
+	}
+
+	auto erase(const_iterator pos) -> iterator
+	{
+		return erase(const_cast<iterator>(pos));
+	}
+
+	auto erase(iterator first, iterator last) -> iterator
+	{
+		if (first >= last)
+			return;
+
+		if constexpr (!std::is_trivially_destructible_v<value_type>)
+		{
+			for (auto it = first; it != last; ++it)
+				*it.~value_type();
+		}
+
+		std::move(last, end(), first);
+		erase(end() - (last - first), end());
+		m_size -= last - first;
+	}
+
+	auto erase(const_iterator first, const_iterator last)
+	{
+		return erase(const_cast<iterator>(first), const_cast<iterator>(last));
+	}
+
 	void push_back(const value_type& v)
 	{
 		maybe_increase_capacity();
@@ -571,6 +610,17 @@ public:
 		return ref;
 	}
 
+	void pop_back()
+	{
+		if (m_size == 0)
+			return;
+
+		if (!std::is_trivially_destructible_v<value_type>)
+		{
+			operator[](m_size - 1).~value_type();
+		}
+		--m_size;
+	}
 
 	//
 	// comparators
