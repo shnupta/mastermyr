@@ -1,0 +1,5 @@
+- header only?
+- inplace_vector (static vector)
+- memory allocators
+- io engine
+- socket types?
