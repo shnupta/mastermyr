@@ -13,6 +13,7 @@ namespace myr {
 
 namespace detail {
 
+// TODO: move to some util file
 template<class Number>
 constexpr bool is_powerof2(Number v) {
 	return v && ((v & (v - 1)) == 0);
